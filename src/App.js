@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import API_BASE from './config';
 import {
   Search,
@@ -203,6 +203,7 @@ export default function App() {
   // Tracks which PRIMARY_FILTERS have data in current viewport — drives filter button dim state
   const [viewportCounts, setViewportCounts] = useState({});
   const [pendingQuery, setPendingQuery] = useState('');
+  const handleAssistantQueryConsumed = useCallback(() => setPendingQuery(''), []);
   const [isComparing, setIsComparing] = useState(false);
   const [activeViewport, setActiveViewport] = useState('A');
   const [mapCenters, setMapCenters] = useState({ A: null, B: null });
@@ -1762,7 +1763,7 @@ export default function App() {
             {activeTab === 'assistant' && (
               <CivicAssistant
                 initialQuery={pendingQuery}
-                panToRegion={panToRegion}
+                onQueryConsumed={handleAssistantQueryConsumed}
               />
             )}
 
@@ -2013,6 +2014,9 @@ export default function App() {
             {/* OmniSearch hidden when filter dropdown is open — avoids all stacking context fights */}
             {activeTab !== 'assistant' && !isComparing && !dropdownOpen && (
               <OmniSearch
+                cityName={selectedCity?.name}
+                issueCount={activeAreaIssues.length}
+                viewportCounts={viewportCounts}
                 onExpand={() => {
                   setPendingQuery('');
                   setActiveTab('assistant');

@@ -11,4 +11,8 @@
  */
 const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
+/** Citizen Data Assistant (FastAPI) — OpenAI chat; keys stay on server */
+export const CDA_API_BASE =
+  process.env.REACT_APP_CDA_API_URL || 'http://localhost:8000';
+
 export default API_BASE;

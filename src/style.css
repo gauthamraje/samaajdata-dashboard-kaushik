@@ -37,6 +37,26 @@ input::placeholder {
   transition: opacity 0.2s ease;
 }
 
+.cda-markdown p {
+  margin: 0.5em 0;
+}
+.cda-markdown p:first-child {
+  margin-top: 0;
+}
+.cda-markdown strong {
+  color: #fff;
+  font-weight: 600;
+}
+.cda-markdown a {
+  color: #34d399;
+  text-decoration: underline;
+}
+.cda-markdown ul,
+.cda-markdown ol {
+  margin: 0.5em 0;
+  padding-left: 1.25em;
+}
+
 input:focus::placeholder {
   opacity: 0.3;
 }

@@ -3,12 +3,35 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Confetti from 'react-confetti';
 import html2canvas from 'html2canvas';
 import { 
-  X, ChevronRight, Mail, Share2, Camera, CheckCircle2, 
-  AlertTriangle, ShieldAlert, PackageSearch, PenTool, Check, ArrowLeft, Sparkles, MapPin
+  X, ChevronRight, ChevronDown, Mail, Share2, Camera, CheckCircle2, 
+  AlertTriangle, ShieldAlert, PackageSearch, PenTool, Check, ArrowLeft, Sparkles, MapPin, Info
 } from 'lucide-react';
+
+const FALLBACK_COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#14b8a6', '#f97316', '#6366f1'];
+const fallbackColor = (name) => {
+  let hash = 0;
+  for (let i = 0; i < (name || '').length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return FALLBACK_COLORS[hash % FALLBACK_COLORS.length];
+};
+
+const formatNumber = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return value;
+  const abs = Math.abs(n);
+  return n.toLocaleString('en-IN', { maximumFractionDigits: abs >= 100 ? 0 : abs >= 10 ? 1 : 2 });
+};
+
+const MAX_DETAILS_COLLAPSED = 8;
 
 export default function ActionEngine({ selectedIssue, closeCard, ISSUE_CONFIG, onActionComplete }) {
   const [actionLevel, setActionLevel] = useState(null);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [showAllFields, setShowAllFields] = useState(false);
+
+  useEffect(() => {
+    setAboutOpen(false);
+    setShowAllFields(false);
+  }, [selectedIssue.id]);
   const [civicPoints, setCivicPoints] = useState(0);
   const [actionCompleted, setActionCompleted] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
@@ -103,8 +126,16 @@ export default function ActionEngine({ selectedIssue, closeCard, ISSUE_CONFIG, o
 
   // Resolve icon & color from both old mock shape (type) and new API shape (category/subcategory)
   const issueKey = selectedIssue.category || selectedIssue.type;
-  const IssueIcon = ISSUE_CONFIG[issueKey]?.icon || ISSUE_CONFIG[selectedIssue.subcategory]?.icon || AlertTriangle;
-  const issueColor = ISSUE_CONFIG[issueKey]?.color || ISSUE_CONFIG[selectedIssue.subcategory]?.color || '#ffffff';
+  const IssueIcon = ISSUE_CONFIG[issueKey]?.icon || ISSUE_CONFIG[selectedIssue.subcategory]?.icon || MapPin;
+  const issueColor = ISSUE_CONFIG[issueKey]?.color || ISSUE_CONFIG[selectedIssue.subcategory]?.color || fallbackColor(issueKey);
+
+  // Generic facility panel: everything below comes from the dataset's column metadata
+  const fields = Array.isArray(selectedIssue.fields) ? selectedIssue.fields : null;
+  const isFacilityPanel = selectedIssue.type !== 'Action' && !!fields;
+  const statFields = isFacilityPanel ? fields.filter(f => f.role === 'Metric' && f.numeric).slice(0, 4) : [];
+  const detailFields = isFacilityPanel ? fields.filter(f => !statFields.includes(f)) : [];
+  const visibleDetails = showAllFields ? detailFields : detailFields.slice(0, MAX_DETAILS_COLLAPSED);
+  const datasetInfo = selectedIssue.dataset || null;
 
   // Parse location and metadata from the normalized API response
   const loc = selectedIssue.location || null;           // { Ward Name, Zone, Sub Division, Location }
@@ -197,6 +228,10 @@ export default function ActionEngine({ selectedIssue, closeCard, ISSUE_CONFIG, o
             {selectedIssue.heading || `${displayLabel} Facility`}
           </motion.h2>
 
+          {!actionLevel && isFacilityPanel && selectedIssue.subtitle && (
+            <p className="text-xs text-zinc-400 mb-2">{selectedIssue.subtitle}</p>
+          )}
+
           {/* Location Block — only shown before action level is selected */}
           {!actionLevel && locationLine && (
             <div className="flex flex-col gap-0.5 mb-2">
@@ -210,12 +245,15 @@ export default function ActionEngine({ selectedIssue, closeCard, ISSUE_CONFIG, o
             </div>
           )}
 
-          <motion.p layout className="text-sm text-zinc-400 leading-relaxed">
-            {actionLevel
-              ? 'Resolution mode active.'
-              : selectedIssue.description || `A ${displayLabel.toLowerCase()} data point from verified civic datasets.`
-            }
-          </motion.p>
+          {/* Facility panels show the dataset description under "About this dataset" instead */}
+          {(actionLevel || !isFacilityPanel) && (
+            <motion.p layout className="text-sm text-zinc-400 leading-relaxed">
+              {actionLevel
+                ? 'Resolution mode active.'
+                : selectedIssue.description || `A ${displayLabel.toLowerCase()} data point from verified civic datasets.`
+              }
+            </motion.p>
+          )}
         </motion.div>
 
         <AnimatePresence mode="wait">
@@ -228,6 +266,67 @@ export default function ActionEngine({ selectedIssue, closeCard, ISSUE_CONFIG, o
             >
               {/* Metadata Grid — Date + Status + Live Attributes */}
               <div className="flex flex-col gap-4 mb-8">
+                {isFacilityPanel ? (
+                  <>
+                    {statFields.length > 0 && (
+                      <div className={`grid gap-3 ${statFields.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                        {statFields.map(f => (
+                          <div
+                            key={f.key}
+                            title={f.description || f.label}
+                            className="flex flex-col gap-1 p-4 rounded-2xl bg-zinc-900/40 border border-zinc-800"
+                          >
+                            <span className="text-xl font-semibold text-white leading-none">
+                              {formatNumber(f.value)}
+                              {f.unit && <span className="text-xs font-medium text-zinc-400 ml-1">{f.unit}</span>}
+                            </span>
+                            <span className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase truncate">{f.label}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {detailFields.length > 0 && (
+                      <div className="flex flex-col p-4 rounded-2xl bg-zinc-900/40 border border-zinc-800">
+                        <span className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase mb-1">Details</span>
+                        {visibleDetails.map((f, i) => (
+                          <div
+                            key={f.key}
+                            className={`flex flex-col gap-0.5 py-2.5 ${i < visibleDetails.length - 1 ? 'border-b border-zinc-800/60' : ''}`}
+                          >
+                            <span className="flex items-center gap-1 text-[11px] text-zinc-500 leading-snug">
+                              {f.label}
+                              {f.description && (
+                                <span title={f.description} className="cursor-help">
+                                  <Info className="w-3 h-3 text-zinc-600" />
+                                </span>
+                              )}
+                            </span>
+                            <span className="text-sm text-zinc-200 leading-snug break-words">
+                              {f.numeric ? formatNumber(f.value) : f.value}
+                              {f.unit && <span className="text-zinc-500 ml-1">{f.unit}</span>}
+                            </span>
+                          </div>
+                        ))}
+                        {detailFields.length > MAX_DETAILS_COLLAPSED && (
+                          <button
+                            onClick={() => setShowAllFields(!showAllFields)}
+                            className="mt-2 text-xs font-medium text-zinc-400 hover:text-white text-left"
+                          >
+                            {showAllFields ? 'Show less' : `Show all ${detailFields.length} details`}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {selectedIssue.date && (
+                      <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-zinc-900/40 border border-zinc-800">
+                        <span className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase">Data last updated</span>
+                        <span className="text-sm font-medium text-zinc-200">{selectedIssue.date}</span>
+                      </div>
+                    )}
+                  </>
+                ) : (
                 <div className="grid grid-cols-2 gap-3">
                   <div className="flex flex-col gap-1 p-4 rounded-2xl bg-zinc-900/40 border border-zinc-800">
                     <span className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase">Date</span>
@@ -246,6 +345,7 @@ export default function ActionEngine({ selectedIssue, closeCard, ISSUE_CONFIG, o
                     </span>
                   </div>
                 </div>
+                )}
 
                 {/* Coordinates + Partner Source */}
                 <div className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-zinc-900/40 border border-zinc-800">
@@ -257,6 +357,26 @@ export default function ActionEngine({ selectedIssue, closeCard, ISSUE_CONFIG, o
                     <span className="ml-auto text-[10px] font-bold text-zinc-600 uppercase tracking-widest">{partner}</span>
                   )}
                 </div>
+
+                {isFacilityPanel && datasetInfo && (datasetInfo.title || datasetInfo.description) && (
+                  <div className="rounded-2xl bg-zinc-900/40 border border-zinc-800 overflow-hidden">
+                    <button
+                      onClick={() => setAboutOpen(!aboutOpen)}
+                      className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left"
+                    >
+                      <span className="flex flex-col min-w-0">
+                        <span className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase">About this dataset</span>
+                        <span className="text-xs text-zinc-300 truncate">
+                          {[datasetInfo.title, partner].filter(Boolean).join(' · ')}
+                        </span>
+                      </span>
+                      <ChevronDown className={`w-4 h-4 text-zinc-500 shrink-0 transition-transform ${aboutOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {aboutOpen && datasetInfo.description && (
+                      <p className="px-4 pb-4 text-xs text-zinc-400 leading-relaxed">{datasetInfo.description}</p>
+                    )}
+                  </div>
+                )}
               </div>
 
               {selectedIssue.type === 'Action' ? (

@@ -1,0 +1,13 @@
+{
+  "files": {
+    "main.css": "/samaajdata-dashboard/static/css/main.c82c3acc.css",
+    "main.js": "/samaajdata-dashboard/static/js/main.7df7c5f6.js",
+    "index.html": "/samaajdata-dashboard/index.html",
+    "main.c82c3acc.css.map": "/samaajdata-dashboard/static/css/main.c82c3acc.css.map",
+    "main.7df7c5f6.js.map": "/samaajdata-dashboard/static/js/main.7df7c5f6.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.c82c3acc.css",
+    "static/js/main.7df7c5f6.js"
+  ]
+}

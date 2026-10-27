@@ -38,7 +38,10 @@ import {
   Lightbulb,
   ScanSearch,
   Navigation,
-  Zap
+  Zap,
+  Layers,
+  Minus,
+  Plus
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import maplibregl from 'maplibre-gl';
@@ -51,7 +54,30 @@ import OmniSearch from './components/OmniSearch';
 import CivicAssistant from './components/CivicAssistant';
 import UserProfile from './components/UserProfile';
 
-const PRIMARY_FILTERS = ['Trees', 'Toilets', 'Health', 'Water'];
+// Dataset filters come from the data (/api/tiles/filters), never from a hardcoded list.
+// A selection key is "<category>::<subcategory>", or "<category>::*" for a whole category
+// (which also covers subcategories added later).
+const ALL_SUBCATEGORIES = '*';
+const facetKey = (category, subcategory) => `${category}::${subcategory}`;
+const splitFacetKey = (key) => {
+  const i = key.indexOf('::');
+  return [key.slice(0, i), key.slice(i + 2)];
+};
+const buildDatasetFilterParam = (datasetFilters) => datasetFilters
+  .map(key => {
+    const [category, subcategory] = splitFacetKey(key);
+    return `${encodeURIComponent(category)}::${encodeURIComponent(subcategory)}`;
+  })
+  .join(',');
+
+const CATEGORY_FALLBACK_COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#14b8a6', '#f97316', '#6366f1'];
+const colorForName = (name, issueConfig) => {
+  if (issueConfig[name]?.color) return issueConfig[name].color;
+  let hash = 0;
+  for (let i = 0; i < (name || '').length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return CATEGORY_FALLBACK_COLORS[hash % CATEGORY_FALLBACK_COLORS.length];
+};
+
 const SECONDARY_FILTERS = [
   // Action Civic Domain Categories (real data — 4,795 points)
   'Waste Management',
@@ -200,8 +226,14 @@ export default function App() {
   const [activeAreaTopicFilter, setActiveAreaTopicFilter] = useState('All Topics');
   const [activeActionFiltersList, setActiveActionFiltersList] = useState({ categories: [], actionTypes: [], topics: [] });
   const [resolvedIssueIds, setResolvedIssueIds] = useState([]);
-  // Tracks which PRIMARY_FILTERS have data in current viewport — drives filter button dim state
+  // Point counts per "<category>::<subcategory>" in the current viewport — shown in the dataset filter
   const [viewportCounts, setViewportCounts] = useState({});
+  const [datasetFilters, setDatasetFilters] = useState([]);
+  const [filterTree, setFilterTree] = useState({ version: 0, total: 0, hasActions: false, categories: [] });
+  const [datasetDropdownOpen, setDatasetDropdownOpen] = useState(false);
+  const [datasetSearch, setDatasetSearch] = useState('');
+  const [expandedCategories, setExpandedCategories] = useState([]);
+  const datasetDropdownRef = useRef(null);
   const [pendingQuery, setPendingQuery] = useState('');
   const [isComparing, setIsComparing] = useState(false);
   const [activeViewport, setActiveViewport] = useState('A');
@@ -299,6 +331,87 @@ export default function App() {
         : [...prev, filter]
     );
   };
+
+  // --- Dataset filter (category → subcategory) ---
+  const getCategorySelection = (categoryName) => {
+    if (datasetFilters.includes(facetKey(categoryName, ALL_SUBCATEGORIES))) return 'all';
+    return datasetFilters.some(key => splitFacetKey(key)[0] === categoryName) ? 'some' : 'none';
+  };
+
+  const isSubcategorySelected = (categoryName, subName) =>
+    datasetFilters.includes(facetKey(categoryName, ALL_SUBCATEGORIES)) ||
+    datasetFilters.includes(facetKey(categoryName, subName));
+
+  const toggleDatasetCategory = (category) => {
+    const selection = getCategorySelection(category.name);
+    setDatasetFilters(prev => {
+      const others = prev.filter(key => splitFacetKey(key)[0] !== category.name);
+      return selection === 'none' ? [...others, facetKey(category.name, ALL_SUBCATEGORIES)] : others;
+    });
+  };
+
+  const toggleDatasetSubcategory = (category, subName) => {
+    setDatasetFilters(prev => {
+      const others = prev.filter(key => splitFacetKey(key)[0] !== category.name);
+      const allSubs = category.subcategories.map(s => s.name);
+      let selected = prev.includes(facetKey(category.name, ALL_SUBCATEGORIES))
+        ? allSubs
+        : prev.filter(key => splitFacetKey(key)[0] === category.name).map(key => splitFacetKey(key)[1]);
+      selected = selected.includes(subName) ? selected.filter(s => s !== subName) : [...selected, subName];
+      if (selected.length === 0) return others;
+      if (allSubs.every(s => selected.includes(s))) return [...others, facetKey(category.name, ALL_SUBCATEGORIES)];
+      return [...others, ...selected.map(s => facetKey(category.name, s))];
+    });
+  };
+
+  const toggleCategoryExpanded = (name) => {
+    setExpandedCategories(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
+  };
+
+  const viewportCountFor = (categoryName, subName) => viewportCounts[facetKey(categoryName, subName)] || 0;
+  const hasViewportCounts = Object.keys(viewportCounts).length > 0;
+
+  // Load the category tree; re-poll so newly ingested datasets appear without a page reload.
+  useEffect(() => {
+    let cancelled = false;
+    const loadFilterTree = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/tiles/filters`);
+        const data = await res.json();
+        if (!cancelled && data && Array.isArray(data.categories)) {
+          setFilterTree(prev => (prev.version === data.version ? prev : data));
+        }
+      } catch (err) {
+        console.error('[SamaajData] Failed to load dataset filters:', err);
+      }
+    };
+    loadFilterTree();
+    const timer = setInterval(loadFilterTree, 60000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, []);
+
+  // Drop selections whose category/subcategory no longer exists after a data reload.
+  useEffect(() => {
+    if (!filterTree.version) return;
+    setDatasetFilters(prev => {
+      const next = prev.filter(key => {
+        const [cat, sub] = splitFacetKey(key);
+        const node = filterTree.categories.find(c => c.name === cat);
+        return node && (sub === ALL_SUBCATEGORIES || node.subcategories.some(s => s.name === sub));
+      });
+      return next.length === prev.length ? prev : next;
+    });
+  }, [filterTree]);
+
+  // Close the dataset dropdown on outside click.
+  useEffect(() => {
+    if (!datasetDropdownOpen) return;
+    const onMouseDown = (e) => {
+      if (datasetDropdownRef.current && !datasetDropdownRef.current.contains(e.target)) setDatasetDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [datasetDropdownOpen]);
 
   const spring = { type: 'spring', stiffness: 500, damping: 30 };
 
@@ -405,7 +518,7 @@ export default function App() {
           type: 'symbol',
           source: 'samaaj_points',
           'source-layer': 'samaaj_points',
-          filter: ['all', ['!', ['has', 'point_count']], ['!=', 'type', 'Action']],
+          filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'type'], 'Action']],
           layout: {
             'icon-image': [
               'coalesce',
@@ -678,7 +791,7 @@ export default function App() {
   }, []);
 
   // Surgical Sync of Civic Issues to Map Pins
-  // CRITICAL: PRIMARY_FILTERS = facility filters (category param)
+  // CRITICAL: datasetFilters = facility filters (category param)
   //           SECONDARY_FILTERS = action domain filters (actionCat param) — must NOT go into category or facility tiles vanish
   useEffect(() => {
     if (!mapInstance.current || !mapInstance.current.isStyleLoaded()) return;
@@ -686,23 +799,22 @@ export default function App() {
     const source = mapInstance.current.getSource('samaaj_points');
     if (!source) return;
 
-    const primaryFilters = activeFilters.filter(f => PRIMARY_FILTERS.includes(f));
     const actionDomainFilters = activeFilters.filter(f => SECONDARY_FILTERS.includes(f));
     // BUG FIX: Support multi-select secondary filters — join ALL active domain filters, not just [0]
     const effectiveActionCat = actionDomainFilters.length > 0 ? actionDomainFilters[0] : activeAreaActionFilter;
 
     // Robust filter matrix — all 8 combinations handled correctly:
-    // Any action-specific filter active with NO primary facility filter → category=none (exclude facilities)
-    // Primary filter active → category=Trees,Water,... (facilities only of those types)
-    // Mixed → primary facilities + action-filtered actions together
+    // Any action-specific filter active with NO dataset filter → category=none (exclude facilities)
+    // Dataset filter active → category=<cat>::<sub>,... (facilities only of those datasets)
+    // Mixed → selected facilities + action-filtered actions together
     // No filters → category=all (show everything)
-    const isActionOnlyView = primaryFilters.length === 0 && (
+    const isActionOnlyView = datasetFilters.length === 0 && (
       effectiveActionCat !== 'All Categories' ||
       activeAreaActionTypeFilter !== 'All Types' ||
       activeAreaTopicFilter !== 'All Topics'
     );
-    const filtersParam = primaryFilters.length > 0
-      ? primaryFilters.join(',')
+    const filtersParam = datasetFilters.length > 0
+      ? buildDatasetFilterParam(datasetFilters)
       : isActionOnlyView ? 'none' : 'all';
 
     let newTilesUrl = `${API_BASE}/api/tiles/{z}/{x}/{y}?category=${encodeURIComponent(filtersParam)}&v=${Date.now()}`;
@@ -715,7 +827,7 @@ export default function App() {
     // spider-legs, spider-points, and other custom GeoJSON layers during the diff.
     source.setTiles([newTilesUrl]);
 
-  }, [activeFilters, selectedIssue, resolvedIssueIds, activeAreaActionFilter, activeAreaActionTypeFilter, activeAreaTopicFilter]);
+  }, [activeFilters, datasetFilters, filterTree.version, selectedIssue, resolvedIssueIds, activeAreaActionFilter, activeAreaActionTypeFilter, activeAreaTopicFilter]);
 
   // Map 2 Initialization Logic (Secondary Viewport)
   useEffect(() => {
@@ -734,7 +846,7 @@ export default function App() {
       mapInstance2.current.on('load', () => {
         generateTextures(mapInstance2.current);
 
-        const filtersParam = activeFilters.length > 0 ? activeFilters.join(',') : 'all';
+        const filtersParam = datasetFilters.length > 0 ? buildDatasetFilterParam(datasetFilters) : 'all';
         mapInstance2.current.addSource('samaaj_points', {
           type: 'vector',
           tiles: [`${API_BASE}/api/tiles/{z}/{x}/{y}?category=${encodeURIComponent(filtersParam)}&v=${Date.now()}`],
@@ -797,7 +909,7 @@ export default function App() {
           type: 'symbol',
           source: 'samaaj_points',
           'source-layer': 'samaaj_points',
-          filter: ['all', ['!', ['has', 'point_count']], ['!=', 'type', 'Action']],
+          filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'type'], 'Action']],
           layout: {
             'icon-image': [
               'coalesce',
@@ -1078,17 +1190,16 @@ export default function App() {
     const source = mapInstance2.current.getSource('samaaj_points');
     if (!source) return;
 
-    const primaryFilters = activeFilters.filter(f => PRIMARY_FILTERS.includes(f));
     const actionDomainFilters = activeFilters.filter(f => SECONDARY_FILTERS.includes(f));
     const effectiveActionCat = actionDomainFilters.length > 0 ? actionDomainFilters[0] : activeAreaActionFilter;
 
-    const isActionOnlyView = primaryFilters.length === 0 && (
+    const isActionOnlyView = datasetFilters.length === 0 && (
       effectiveActionCat !== 'All Categories' ||
       activeAreaActionTypeFilter !== 'All Types' ||
       activeAreaTopicFilter !== 'All Topics'
     );
-    const filtersParam = primaryFilters.length > 0
-      ? primaryFilters.join(',')
+    const filtersParam = datasetFilters.length > 0
+      ? buildDatasetFilterParam(datasetFilters)
       : isActionOnlyView ? 'none' : 'all';
 
     let newTilesUrl = `${API_BASE}/api/tiles/{z}/{x}/{y}?category=${encodeURIComponent(filtersParam)}&v=${Date.now()}`;
@@ -1099,7 +1210,7 @@ export default function App() {
     // GOOGLE TIER: setTiles() — surgical URL swap, zero layer disruption (same fix as Map 1)
     source.setTiles([newTilesUrl]);
 
-  }, [activeFilters, activeAreaActionFilter, activeAreaActionTypeFilter, activeAreaTopicFilter]);
+  }, [activeFilters, datasetFilters, filterTree.version, activeAreaActionFilter, activeAreaActionTypeFilter, activeAreaTopicFilter]);
 
   // Centralized Context Syncing (Ninjas & Area Issues)
   useEffect(() => {
@@ -1188,19 +1299,8 @@ export default function App() {
               setActiveAreaIssues(regionState.issues);
               setActiveAreaActions(regionState.actions);
               setActiveActionFiltersList(regionState.filters);
-              // Update viewport counts so primary filter buttons reflect current data availability
-              // Maps filterCategory values to counts for the primary filter buttons
-              const vc = data.counts || {};
-              // Health dataset has subcategory='Health' but category='Water' — merge both keys
-              // so both 'Health' and 'Water' buttons can check availability
-              setViewportCounts({
-                ...vc,
-                // dataset id=3: subcategory=Health maps to both filter names
-                'Health': (vc['Health'] || 0),
-                'Water':  (vc['Health'] || 0), // same dataset, Water button = Health subcategory data
-                'Trees':  (vc['Trees']  || 0),
-                'Toilets':(vc['Toilets']|| 0),
-              });
+              // Per-dataset counts in view, shown next to each entry in the dataset filter
+              setViewportCounts(data.facets || {});
 
               // NINJA FIX: Use dedicated /api/tiles/ninjas/viewport endpoint instead of
               // queryRenderedFeatures which was broken at city zoom (ninjas all clustered,
@@ -1825,34 +1925,194 @@ export default function App() {
             )}
           </AnimatePresence>
 
+          {/* Zoom controls — act on the viewport under the cursor in compare mode */}
+          <div className="absolute bottom-28 right-6 z-[600] flex flex-col rounded-2xl overflow-hidden border border-zinc-700 bg-black/80 backdrop-blur-md shadow-2xl">
+            <button
+              onClick={() => (isComparing && activeViewport === 'B' ? mapInstance2.current : mapInstance.current)?.zoomIn()}
+              title="Zoom in"
+              aria-label="Zoom in"
+              className="w-10 h-10 flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+            <div className="h-px bg-zinc-700" />
+            <button
+              onClick={() => (isComparing && activeViewport === 'B' ? mapInstance2.current : mapInstance.current)?.zoomOut()}
+              title="Zoom out"
+              aria-label="Zoom out"
+              className="w-10 h-10 flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors"
+            >
+              <Minus className="w-4 h-4" />
+            </button>
+          </div>
+
           {/* Map Filters Overlay — z-[600] ensures dropdown outranks OmniSearch */}
-          <div className="absolute top-6 left-6 z-[600] flex items-center gap-2">
-          {PRIMARY_FILTERS.map((filter) => {
-              // A filter is "available" if it has data in the current viewport OR is already active
-              // Maps filter button name → filterCategory key in viewportCounts
-              // 'Water' button maps to 'Health' key because dataset id=3 has subcategory='Health' but category='Water'
-              const countKey = filter === 'Water' ? 'Health' : filter;
-              const hasDataInViewport = Object.keys(viewportCounts).length === 0 || (viewportCounts[countKey] || 0) > 0;
-              const isActive = activeFilters.includes(filter);
-              const isUnavailable = !hasDataInViewport && !isActive;
+          <div className="absolute top-6 left-6 z-[600] flex flex-wrap items-center gap-2 max-w-[calc(100%-3rem)]">
+            {/* Dataset filter: categories → subcategories, built from the data */}
+            <div className="relative" ref={datasetDropdownRef}>
+              <button
+                onClick={() => { setDatasetDropdownOpen(!datasetDropdownOpen); setDatasetSearch(''); }}
+                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors border ${
+                  datasetFilters.length > 0 || datasetDropdownOpen
+                    ? 'bg-zinc-100 text-zinc-900 border-zinc-100 shadow-md'
+                    : 'bg-black/80 backdrop-blur-md text-zinc-300 border-zinc-700 hover:border-zinc-500 hover:bg-black'
+                }`}
+              >
+                <Layers className="w-4 h-4" />
+                {datasetFilters.length > 0 ? `Datasets (${datasetFilters.length})` : 'All datasets'}
+                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${datasetDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              <AnimatePresence>
+                {datasetDropdownOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute top-full mt-2 left-0 w-[320px] max-h-[560px] bg-[#121212] border border-zinc-800 rounded-xl shadow-2xl overflow-hidden z-[700] flex flex-col"
+                  >
+                    <div className="px-3 pt-3 pb-2">
+                      <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-700">
+                        <Search className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                        <input
+                          autoFocus
+                          type="text"
+                          value={datasetSearch}
+                          onChange={e => setDatasetSearch(e.target.value)}
+                          placeholder="Search categories..."
+                          className="w-full bg-transparent text-sm text-zinc-200 placeholder-zinc-500 outline-none"
+                        />
+                        {datasetSearch && (
+                          <button onClick={() => setDatasetSearch('')}>
+                            <X className="w-3 h-3 text-zinc-500 hover:text-zinc-300" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="px-3 py-1.5 flex items-center justify-between">
+                      <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest">Categories</span>
+                      <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest">{hasViewportCounts ? 'In view' : 'Points'}</span>
+                    </div>
+
+                    <div className="overflow-y-auto pb-1 [&::-webkit-scrollbar]:hidden">
+                      {filterTree.categories
+                        .filter(cat => {
+                          const q = datasetSearch.trim().toLowerCase();
+                          return !q || cat.name.toLowerCase().includes(q) ||
+                            cat.subcategories.some(s => s.name.toLowerCase().includes(q));
+                        })
+                        .map(cat => {
+                          const q = datasetSearch.trim().toLowerCase();
+                          const selection = getCategorySelection(cat.name);
+                          const isExpanded = expandedCategories.includes(cat.name) || !!q;
+                          const color = colorForName(cat.name, ISSUE_CONFIG);
+                          const CatIcon = ISSUE_CONFIG[cat.name]?.icon || MapPin;
+                          const catInView = cat.subcategories.reduce((sum, s) => sum + viewportCountFor(cat.name, s.name), 0);
+                          const catCount = hasViewportCounts ? catInView : cat.count;
+                          const subs = cat.subcategories.filter(s => !q || cat.name.toLowerCase().includes(q) || s.name.toLowerCase().includes(q));
+                          return (
+                            <div key={cat.name}>
+                              <div className={`flex items-center gap-2 px-3 py-2 transition-colors ${selection !== 'none' ? 'bg-zinc-800/70' : 'hover:bg-zinc-800/50'}`}>
+                                <button
+                                  onClick={() => toggleDatasetCategory(cat)}
+                                  title={selection === 'none' ? `Show all of ${cat.name}` : `Remove ${cat.name}`}
+                                  className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                                    selection === 'none' ? 'border-zinc-600' : 'bg-emerald-500 border-emerald-500'
+                                  }`}
+                                >
+                                  {selection === 'all' && <Check className="w-3 h-3 text-zinc-900" />}
+                                  {selection === 'some' && <Minus className="w-3 h-3 text-zinc-900" />}
+                                </button>
+                                <button
+                                  onClick={() => toggleCategoryExpanded(cat.name)}
+                                  className="flex-1 flex items-center gap-2 min-w-0 text-left"
+                                >
+                                  <span style={{ color }}><CatIcon className="w-3.5 h-3.5 shrink-0" /></span>
+                                  <span className={`truncate text-xs font-semibold ${catCount === 0 ? 'text-zinc-500' : 'text-zinc-200'}`}>{cat.name}</span>
+                                  <span className="ml-auto text-[10px] font-mono text-zinc-500" title={`${catInView} in view · ${cat.count} total`}>
+                                    {catCount.toLocaleString()}
+                                  </span>
+                                  <ChevronRight className={`w-3.5 h-3.5 text-zinc-500 shrink-0 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                                </button>
+                              </div>
+                              {isExpanded && subs.map(sub => {
+                                const isSelected = isSubcategorySelected(cat.name, sub.name);
+                                const subInView = viewportCountFor(cat.name, sub.name);
+                                const subCount = hasViewportCounts ? subInView : sub.count;
+                                return (
+                                  <button
+                                    key={sub.name}
+                                    onClick={() => toggleDatasetSubcategory(cat, sub.name)}
+                                    className={`w-full flex items-center gap-2 pl-9 pr-3 py-1.5 text-left transition-colors ${isSelected ? 'bg-zinc-800/40' : 'hover:bg-zinc-800/40'}`}
+                                  >
+                                    <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${isSelected ? 'bg-emerald-500 border-emerald-500' : 'border-zinc-600'}`}>
+                                      {isSelected && <Check className="w-2.5 h-2.5 text-zinc-900" />}
+                                    </span>
+                                    <span className={`truncate text-xs ${subCount === 0 ? 'text-zinc-500' : 'text-zinc-300'}`}>{sub.name}</span>
+                                    <span className="ml-auto text-[10px] font-mono text-zinc-500" title={`${subInView} in view · ${sub.count} total`}>
+                                      {subCount.toLocaleString()}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          );
+                        })}
+                      {filterTree.categories.length === 0 && (
+                        <p className="px-4 py-3 text-xs text-zinc-600 italic">No datasets on the map yet</p>
+                      )}
+                    </div>
+
+                    {datasetFilters.length > 0 && (
+                      <div className="px-4 py-2.5 border-t border-zinc-800 flex items-center justify-between">
+                        <span className="text-xs text-zinc-500">{datasetFilters.length} selected</span>
+                        <button
+                          onClick={() => setDatasetFilters([])}
+                          className="text-xs text-zinc-400 hover:text-white transition-colors font-medium"
+                        >
+                          Clear all
+                        </button>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            {/* Active dataset chips */}
+            {datasetFilters.slice(0, 3).map(key => {
+              const [cat, sub] = splitFacetKey(key);
+              const label = sub === ALL_SUBCATEGORIES ? cat : `${cat} › ${sub}`;
               return (
-                <button
-                  key={filter}
-                  onClick={() => !isUnavailable && toggleFilter(filter)}
-                  title={isUnavailable ? `No ${filter} data in current map view` : `Filter: ${filter}`}
-                  className={`px-4 py-2 rounded-full text-sm font-medium transition-colors border ${
-                    isActive
-                      ? 'bg-zinc-100 text-zinc-900 border-zinc-100 shadow-md'
-                      : isUnavailable
-                        ? 'bg-black/40 backdrop-blur-md text-zinc-600 border-zinc-800 cursor-not-allowed'
-                        : 'bg-black/80 backdrop-blur-md text-zinc-300 border-zinc-700 hover:border-zinc-500 hover:bg-black'
-                  }`}
+                <span
+                  key={key}
+                  className="flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-full text-xs font-medium bg-black/80 backdrop-blur-md text-zinc-200 border border-zinc-700"
                 >
-                  {filter}
-                </button>
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: colorForName(cat, ISSUE_CONFIG) }} />
+                  <span className="truncate max-w-[180px]">{label}</span>
+                  <button
+                    onClick={() => setDatasetFilters(prev => prev.filter(k => k !== key))}
+                    title={`Remove ${label}`}
+                    className="text-zinc-500 hover:text-white"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
               );
             })}
+            {datasetFilters.length > 3 && (
+              <button
+                onClick={() => setDatasetDropdownOpen(true)}
+                className="px-3 py-1.5 rounded-full text-xs font-medium bg-black/80 backdrop-blur-md text-zinc-400 border border-zinc-700 hover:text-white"
+              >
+                +{datasetFilters.length - 3} more
+              </button>
+            )}
 
+            {/* Civic action filters — only when action data exists */}
+            {(filterTree.hasActions || activeFilters.length > 0 || activeAreaTopicFilter !== 'All Topics') && (
             <div className="relative">
               <button
                 onClick={() => { setDropdownOpen(!dropdownOpen); setFilterSearchQuery(''); }}
@@ -2006,12 +2266,13 @@ export default function App() {
                 )}
               </AnimatePresence>
             </div>
+            )}
           </div>
 
 
           <AnimatePresence>
             {/* OmniSearch hidden when filter dropdown is open — avoids all stacking context fights */}
-            {activeTab !== 'assistant' && !isComparing && !dropdownOpen && (
+            {activeTab !== 'assistant' && !isComparing && !dropdownOpen && !datasetDropdownOpen && (
               <OmniSearch
                 onExpand={() => {
                   setPendingQuery('');

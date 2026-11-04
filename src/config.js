@@ -11,4 +11,8 @@
  */
 const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
+// Address users add to Claude as a custom connector. nginx serves the MCP at /mcp on
+// the same host as the dashboard, so the fallback follows whichever server we're on.
+export const MCP_URL = process.env.REACT_APP_MCP_URL || `${window.location.origin}/mcp`;
+
 export default API_BASE;

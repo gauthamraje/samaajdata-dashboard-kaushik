@@ -51,7 +51,7 @@ import AreaIntelligence from './components/AreaIntelligence';
 import ActionEngine from './components/ActionEngine';
 
 import OmniSearch from './components/OmniSearch';
-import CivicAssistant from './components/CivicAssistant';
+import AssistantComingSoon from './components/AssistantComingSoon';
 import UserProfile from './components/UserProfile';
 
 // Dataset filters come from the data (/api/tiles/filters), never from a hardcoded list.
@@ -128,25 +128,6 @@ const ISSUE_CONFIG = {
   'Field Audits': { icon: ScanSearch,  color: '#f59e0b' }, // Action challenges aggregate
 };
 
-// --- Ninja Avatar Helpers ---
-const NINJA_AVATAR_COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#14b8a6', '#f97316', '#6366f1'];
-const getNinjaColor = (id) => NINJA_AVATAR_COLORS[Number(id) % NINJA_AVATAR_COLORS.length];
-const getNinjaInitial = (name) => name ? name.trim()[0].toUpperCase() : '?';
-
-const NinjaAvatar = ({ id, name, size = 'sm' }) => {
-  const color = getNinjaColor(id);
-  const initial = getNinjaInitial(name);
-  const sizeClass = size === 'sm' ? 'w-10 h-10 text-sm' : 'w-12 h-12 text-base';
-  return (
-    <div
-      className={`${sizeClass} rounded-full flex items-center justify-center font-bold text-white shrink-0 select-none`}
-      style={{ backgroundColor: color }}
-    >
-      {initial}
-    </div>
-  );
-};
-
 const CITIES = [
   { name: 'Bangalore', lat: 12.9716, lon: 77.5946 },
   { name: 'Chennai', lat: 13.0827, lon: 80.2707 },
@@ -211,7 +192,6 @@ export default function App() {
   // Auth & State Management
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
-  const [activeNinjas, setActiveNinjas] = useState([]);
   const [toastMessage, setToastMessage] = useState(null);
   const [activeFilters, setActiveFilters] = useState([]);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -1301,23 +1281,6 @@ export default function App() {
               setActiveActionFiltersList(regionState.filters);
               // Per-dataset counts in view, shown next to each entry in the dataset filter
               setViewportCounts(data.facets || {});
-
-              // NINJA FIX: Use dedicated /api/tiles/ninjas/viewport endpoint instead of
-              // queryRenderedFeatures which was broken at city zoom (ninjas all clustered,
-              // never returned as unclustered-point features). This endpoint scans the
-              // in-memory R-Tree and works at ALL zoom levels.
-              try {
-                const ninjaRes = await fetch(`${API_BASE}/api/tiles/ninjas/viewport?west=${w}&south=${s}&east=${e}&north=${n}`);
-                const ninjaData = await ninjaRes.json();
-                const visibleNinjas = (ninjaData.ninjas || []).map(n => ({
-                  id:   n.id,
-                  name: n.name || `Ninja #${String(n.id).slice(-4)}`,
-                  org:  n.organization || '',
-                }));
-                setActiveNinjas(visibleNinjas);
-              } catch (ninjaErr) {
-                console.error('[SamaajData] Ninja viewport fetch failed:', ninjaErr);
-              }
           }
         } catch (err) {
           console.error("Bounds API Error:", err);
@@ -1475,77 +1438,22 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-8">
-          {/* ── NINJA AVATAR STRIP (Google Docs style) ── */}
+          {/* ── ACTIVE NINJAS (coming soon) ── */}
           <div className="relative flex items-center justify-end gap-3" ref={ninjaDropdownRef}>
-            {/* Label */}
-            <div className="flex flex-col items-end hidden sm:flex pr-1">
-              <div className="flex items-center gap-1.5 mb-0.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest leading-none">Active Ninjas</span>
-              </div>
-              <AnimatePresence mode="wait">
-                <motion.span
-                  key={isComparing ? activeViewport : 'none'}
-                  initial={{ opacity: 0, y: -5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 5 }}
-                  className="text-[10px] text-zinc-500 font-medium leading-none"
-                >
-                  {isComparing ? `In Region ${activeViewport}` : 'In current viewport'}
-                </motion.span>
-              </AnimatePresence>
-            </div>
-
-            {/* Avatar stack — clicking ANY avatar or +N opens the dropdown */}
             <button
               onClick={() => setNinjaDropdownOpen(v => !v)}
-              className="flex -space-x-3 items-center focus:outline-none"
-              aria-label="View active ninjas"
+              className="flex items-center gap-3 focus:outline-none group"
+              aria-label="Active Ninjas: coming soon"
             >
-              <AnimatePresence mode="popLayout">
-                {activeNinjas.length === 0 ? (
-                  // Empty placeholder ring when no ninjas in viewport
-                  <motion.div
-                    key="empty-ring"
-                    initial={{ scale: 0, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0, opacity: 0 }}
-                    className="w-10 h-10 rounded-full border-2 border-dashed border-zinc-700 flex items-center justify-center bg-zinc-900"
-                    title="No ninjas in current viewport"
-                  >
-                    <Users className="w-4 h-4 text-zinc-600" />
-                  </motion.div>
-                ) : (
-                  <>
-                    {activeNinjas.slice(0, 4).map((ninja, idx) => (
-                      <motion.div
-                        key={ninja.id}
-                        layout
-                        whileHover={{ y: -4, scale: 1.08, zIndex: 100 }}
-                        className="relative cursor-pointer"
-                        style={{ zIndex: 10 - idx }}
-                      >
-                        <div className="ring-[2.5px] ring-[#0A0A0A] rounded-full">
-                          <NinjaAvatar id={ninja.id} name={ninja.name} size="sm" />
-                        </div>
-                      </motion.div>
-                    ))}
-                    {activeNinjas.length > 4 && (
-                      <motion.div
-                        key="extra-avatars"
-                        layout
-                        initial={{ scale: 0, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        exit={{ scale: 0, opacity: 0 }}
-                        whileHover={{ y: -4, scale: 1.08, zIndex: 100 }}
-                        className="relative z-[90] w-10 h-10 rounded-full ring-[2.5px] ring-[#0A0A0A] bg-zinc-800 border border-zinc-700 flex items-center justify-center cursor-pointer hover:bg-zinc-700 transition-colors"
-                      >
-                        <span className="text-xs font-bold text-zinc-300">+{activeNinjas.length - 4}</span>
-                      </motion.div>
-                    )}
-                  </>
-                )}
-              </AnimatePresence>
+              <div className="flex-col items-end hidden sm:flex">
+                <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest leading-none mb-1">Active Ninjas</span>
+                <span className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 bg-zinc-800/80 border border-zinc-700 rounded-full px-2 py-0.5 leading-none">
+                  Coming soon
+                </span>
+              </div>
+              <div className="w-10 h-10 rounded-full border-2 border-dashed border-zinc-700 flex items-center justify-center bg-zinc-900 group-hover:border-zinc-500 transition-colors">
+                <Users className="w-4 h-4 text-zinc-500" />
+              </div>
             </button>
 
             {/* ── NINJA DROPDOWN PANEL ── */}
@@ -1559,71 +1467,32 @@ export default function App() {
                   className="absolute top-[calc(100%+12px)] right-0 w-[300px] bg-[#121212] border border-zinc-800 rounded-2xl shadow-2xl z-[2500] overflow-hidden"
                   // Close on click outside via useEffect below
                 >
-                  {/* Header */}
                   <div className="px-5 pt-4 pb-3 border-b border-zinc-800/80 flex items-center justify-between">
                     <div>
-                      <p className="text-[11px] font-black uppercase tracking-widest text-zinc-400">Field Ninjas</p>
-                      <p className="text-[13px] font-semibold text-white mt-0.5">
-                        {activeNinjas.length} Active {isComparing ? `in Region ${activeViewport}` : 'in Viewport'}
-                      </p>
+                      <p className="text-[11px] font-black uppercase tracking-widest text-zinc-400">Active Ninjas</p>
+                      <p className="text-[13px] font-semibold text-white mt-0.5">Coming soon</p>
                     </div>
                     <button
                       onClick={() => setNinjaDropdownOpen(false)}
+                      aria-label="Close"
                       className="w-7 h-7 rounded-full flex items-center justify-center text-zinc-500 hover:text-white hover:bg-zinc-800 transition-colors"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
 
-                  {/* Roster List */}
-                  <div className="max-h-[320px] overflow-y-auto [&::-webkit-scrollbar]:hidden py-2">
-                    {activeNinjas.length === 0 ? (
-                      <div className="py-8 flex flex-col items-center gap-3 text-center px-6">
-                        <div className="w-10 h-10 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center">
-                          <Users className="w-5 h-5 text-zinc-600" />
-                        </div>
-                        <p className="text-sm text-zinc-500">No ninjas in current map view.</p>
-                        <p className="text-xs text-zinc-600">Pan or zoom out to find active field agents.</p>
-                      </div>
-                    ) : (
-                      activeNinjas.map((ninja, idx) => {
-                        const org = ninja.org && ninja.org !== '' ? ninja.org : null;
-                        return (
-                          <motion.div
-                            key={ninja.id}
-                            initial={{ opacity: 0, x: -8 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: idx * 0.03 }}
-                            className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-900/60 transition-colors group"
-                          >
-                            {/* Initial Avatar */}
-                            <div
-                              className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0 select-none"
-                              style={{ backgroundColor: getNinjaColor(ninja.id) }}
-                            >
-                              {getNinjaInitial(ninja.name)}
-                            </div>
-                            {/* Info — no coordinates */}
-                            <div className="flex-1 min-w-0">
-                              <p className="text-[13px] font-semibold text-zinc-100 truncate leading-tight">
-                                {ninja.name || `Field Agent #${String(ninja.id).slice(-4)}`}
-                              </p>
-                              {org && (
-                                <p className="text-[11px] text-zinc-500 truncate mt-0.5 font-medium">{org}</p>
-                              )}
-                            </div>
-                            {/* Live indicator dot */}
-                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
-                          </motion.div>
-                        );
-                      })
-                    )}
+                  <div className="px-5 py-6 flex flex-col items-center gap-3 text-center">
+                    <div className="w-10 h-10 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center">
+                      <Users className="w-5 h-5 text-zinc-500" />
+                    </div>
+                    <p className="text-sm text-zinc-300 leading-relaxed">
+                      Soon you'll see the Ninjas, our field volunteers, taking action in the area you're viewing on the map.
+                    </p>
                   </div>
 
-                  {/* Footer */}
                   <div className="px-5 py-3 border-t border-zinc-800/80">
                     <p className="text-[10px] text-zinc-600 font-medium">
-                      Field coordinates are not shared to protect privacy.
+                      Field coordinates will not be shared, to protect privacy.
                     </p>
                   </div>
                 </motion.div>
@@ -1860,10 +1729,7 @@ export default function App() {
 
 
             {activeTab === 'assistant' && (
-              <CivicAssistant
-                initialQuery={pendingQuery}
-                panToRegion={panToRegion}
-              />
+              <AssistantComingSoon initialQuery={pendingQuery} />
             )}
 
             {activeTab === 'profile' && (

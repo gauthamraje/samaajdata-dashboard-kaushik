@@ -130,10 +130,87 @@ const ISSUE_CONFIG = {
 
 const CITIES = [
   { name: 'Bangalore', lat: 12.9716, lon: 77.5946 },
+  { name: 'Mysuru', lat: 12.2958, lon: 76.6394 },
   { name: 'Chennai', lat: 13.0827, lon: 80.2707 },
   { name: 'Delhi', lat: 28.6139, lon: 77.2090 },
   { name: 'Punjab', lat: 31.1471, lon: 75.3412 },
 ];
+
+// Density-aware settle: zoom so the viewport shows ~minPoints datapoints.
+const DENSITY_ZOOM = {
+  minPoints: 100,
+  minZoom: 8,
+  maxZoom: 16,
+  startZoom: 13,
+  maxProbes: 5,
+};
+
+const waitForMapIdle = (map) =>
+  new Promise((resolve) => {
+    map.once('idle', resolve);
+  });
+
+const countPointsInView = async (map) => {
+  const b = map.getBounds();
+  const url =
+    `${API_BASE}/api/tiles/bounds` +
+    `?west=${b.getWest()}&south=${b.getSouth()}&east=${b.getEast()}&north=${b.getNorth()}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  return typeof data.total === 'number' ? data.total : 0;
+};
+
+/**
+ * After navigating to a place, binary-search the tightest zoom that still
+ * shows at least minPoints. Uses jumpTo for probes; eases only at the end.
+ * Pass isCancelled() so a newer search/city pick aborts this run.
+ * Call immediately after flyTo/fitBounds so the first moveend is that navigation.
+ */
+const settleZoomForDensity = async (map, { isCancelled } = {}) => {
+  if (!map) return;
+  const { minPoints, minZoom, maxZoom, maxProbes } = DENSITY_ZOOM;
+  const cancelled = () => (typeof isCancelled === 'function' ? isCancelled() : false);
+
+  // Wait for the flyTo/fitBounds animation — do NOT probe the previous viewport
+  await new Promise((resolve) => map.once('moveend', resolve));
+  if (cancelled()) return;
+  await waitForMapIdle(map);
+  if (cancelled()) return;
+
+  let total = await countPointsInView(map);
+  if (cancelled()) return;
+  if (total >= minPoints) return;
+
+  const center = map.getCenter();
+  let lo = minZoom;
+  let hi = Math.min(Math.max(map.getZoom(), minZoom), maxZoom);
+  let bestZoom = minZoom;
+
+  for (let i = 0; i < maxProbes && hi - lo > 0.35; i++) {
+    if (cancelled()) return;
+    const mid = (lo + hi) / 2;
+    map.jumpTo({ center: [center.lng, center.lat], zoom: mid });
+    await waitForMapIdle(map);
+    if (cancelled()) return;
+
+    total = await countPointsInView(map);
+    if (cancelled()) return;
+
+    if (total >= minPoints) {
+      // Still enough points — try a tighter (higher) zoom
+      bestZoom = mid;
+      lo = mid;
+    } else {
+      // Too sparse — zoom out (lower zoom)
+      hi = mid;
+    }
+  }
+
+  if (cancelled()) return;
+  if (Math.abs(map.getZoom() - bestZoom) > 0.05) {
+    map.easeTo({ center: [center.lng, center.lat], zoom: bestZoom, duration: 600 });
+  }
+};
 
 // --- TEXTURE GENERATOR ENGINE (Shared) ---
 const generateTextures = (map) => {
@@ -230,6 +307,7 @@ export default function App() {
   const [selectedCity, setSelectedCity] = useState(CITIES[0]);
   const [showCityDropdown, setShowCityDropdown] = useState(false);
   const searchTimeoutRef = useRef(null);
+  const densitySettleGenRef = useRef(0);
 
   const handleSearchInput = (e) => {
     const query = e.target.value;
@@ -264,26 +342,54 @@ export default function App() {
     setSearchQuery(result.display_name);
     setShowSearchDropdown(false);
 
-    if (mapInstance.current) {
-      // MapLibre flyTo syntax: center is [lng, lat] not [lat, lng]
-      mapInstance.current.flyTo({
+    const map = mapInstance.current;
+    if (!map) return;
+
+    const gen = ++densitySettleGenRef.current;
+    const isCancelled = () => densitySettleGenRef.current !== gen;
+
+    // Prefer Nominatim place bbox; fall back to default start zoom
+    if (Array.isArray(result.boundingbox) && result.boundingbox.length === 4) {
+      const [south, north, west, east] = result.boundingbox.map(parseFloat);
+      map.fitBounds(
+        [
+          [west, south],
+          [east, north],
+        ],
+        { padding: 48, maxZoom: DENSITY_ZOOM.maxZoom, duration: 1500 }
+      );
+    } else {
+      map.flyTo({
         center: [lon, lat],
-        zoom: 16,
-        duration: 1500
+        zoom: DENSITY_ZOOM.startZoom,
+        duration: 1500,
       });
     }
+
+    settleZoomForDensity(map, { isCancelled }).catch((err) => {
+      console.error('Density settle failed', err);
+    });
   };
 
   const handleCitySelect = (city) => {
     setSelectedCity(city);
     setShowCityDropdown(false);
-    if (mapInstance.current) {
-      mapInstance.current.flyTo({
-        center: [city.lon, city.lat],
-        zoom: 12,
-        duration: 2000
-      });
-    }
+
+    const map = mapInstance.current;
+    if (!map) return;
+
+    const gen = ++densitySettleGenRef.current;
+    const isCancelled = () => densitySettleGenRef.current !== gen;
+
+    map.flyTo({
+      center: [city.lon, city.lat],
+      zoom: DENSITY_ZOOM.startZoom,
+      duration: 1500,
+    });
+
+    settleZoomForDensity(map, { isCancelled }).catch((err) => {
+      console.error('Density settle failed', err);
+    });
   };
 
   const handleVerifyIssue = (category = null) => {
@@ -410,7 +516,7 @@ export default function App() {
         container: mapRef.current,
         style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
         center: [77.5852, 12.9105],
-        zoom: 15,
+        zoom: 13,
         pitch: 0,
         maxZoom: 20 // 1% Google-Tier: Capped at crisp street level
       });
@@ -817,7 +923,7 @@ export default function App() {
         container: mapRef2.current,
         style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
         center: [77.6271, 12.9279], // Default to Koramangala
-        zoom: 14,
+        zoom: 13,
         pitch: 0,
         maxZoom: 20,
         preserveDrawingBuffer: false

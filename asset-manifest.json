@@ -1,13 +1,13 @@
 {
   "files": {
     "main.css": "/samaajdata-dashboard/static/css/main.c82c3acc.css",
-    "main.js": "/samaajdata-dashboard/static/js/main.cd04f1cc.js",
+    "main.js": "/samaajdata-dashboard/static/js/main.f1bbedb2.js",
     "index.html": "/samaajdata-dashboard/index.html",
     "main.c82c3acc.css.map": "/samaajdata-dashboard/static/css/main.c82c3acc.css.map",
-    "main.cd04f1cc.js.map": "/samaajdata-dashboard/static/js/main.cd04f1cc.js.map"
+    "main.f1bbedb2.js.map": "/samaajdata-dashboard/static/js/main.f1bbedb2.js.map"
   },
   "entrypoints": [
     "static/css/main.c82c3acc.css",
-    "static/js/main.cd04f1cc.js"
+    "static/js/main.f1bbedb2.js"
   ]
 }
